@@ -1,3 +1,6 @@
-build/
 *.sh
 .bash_history
+*.out
+*.txt
+*.o
+./bin
