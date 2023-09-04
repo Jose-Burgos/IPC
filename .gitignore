@@ -1,6 +1,7 @@
-*.sh
 .bash_history
+*.sh
 *.out
 *.txt
 *.o
 ./bin
+./files

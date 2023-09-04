@@ -26,5 +26,10 @@ $(BIN_DIR)/%: $(SRC_DIR)/%.c
 clean:
 	rm -rf $(BIN_DIR) output.txt
 
-run:
-	./bin/app-test
+run_app:
+	./bin/app files/*.txt
+
+run_slave:
+	./bin/worker files/file1.txt
+
+# run_view: 
