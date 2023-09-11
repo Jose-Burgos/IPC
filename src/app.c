@@ -1,103 +1,81 @@
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <time.h>
 #include <fcntl.h>
 #include <errno.h>
+#include "app.h"
 
-#define SLAVES 5
-#define INPUT 0
-#define OUTPUT 1
+int main(int argc, char *argv[]) {
+    AppData data;
+    int fdout = open("output.txt", O_CREAT | O_RDWR);
 
-void createPipes(int *res, int *arg);
-void closeAndRedirect(int *res, int *arg, int i);
-void closeAppPipes(int *fds, int flag);
-void writeArguments(int total_files, int *current_arg_ptr, int files_per_slave, int extra_file_slaves, char **argv, int *fd_args);
-void closeSiblingPipes(int *res, int *arg, int i);
-void createChild(pid_t *child_pids, int total_files, char **argv, int *res, int *arg);
+    initAppData(&data);
+    distributeFiles(&data, argc, argv);
+    waitForChildren(&data);
+    gatherResults(&data, fdout);
 
-int main(int argc, char *argv[])
-{
-    int fd_args[SLAVES * 2];    // File descriptors of argument pipes (r-slave,w-app)
-    int fd_results[SLAVES * 2]; // File descriptors of result pipes (r-app,w-slave)
+    close(fdout);
+    return 0;
+}
 
-    pid_t child_pids[SLAVES]; // Pids of child processes (useful for the parent process)
+void initAppData(AppData *data) {
+    createPipes(data->fd_results, data->fd_args);
+}
 
-    int fdout = open("output.txt", O_CREAT | O_RDWR); // Output file for child processes
-
-    createPipes(fd_results, fd_args);
-
+void distributeFiles(AppData *data, int argc, char **argv) {
     int current_arg = 1;
-    int total_files = argc - 1; // Excluding the program's name
-    writeArguments(total_files, &current_arg, total_files / SLAVES, total_files % SLAVES, argv, fd_args);
+    int total_files = argc - 1;
+    writeArguments(total_files, &current_arg, total_files / SLAVES, total_files % SLAVES, argv, data->fd_args);
+    createChildren(data->child_pids, total_files, argv, data->fd_results, data->fd_args);
+    closeAppPipes(data->fd_results,OUTPUT);
+}
 
-    createChild(child_pids, total_files, argv, fd_results, fd_args);
-
-    for (int i = 0; i < SLAVES; i++)
-    {
-        waitpid(child_pids[i], NULL, 0);
+void waitForChildren(AppData *data) {
+    for (int i = 0; i < SLAVES; i++) {
+        waitpid(data->child_pids[i], NULL, 0);
     }
+}
 
-    closeAppPipes(fd_args, OUTPUT);
-    closeAppPipes(fd_results, OUTPUT);
-    closeAppPipes(fd_args, INPUT);
+void gatherResults(AppData *data, int fdout) {
+    closeAppPipes(data->fd_args, OUTPUT);
+    closeAppPipes(data->fd_args, INPUT);
 
-    // Read from the result pipe and write to the output file
     char buffer[4096];
     ssize_t bytesRead = 0;
 
     fd_set read_fds;
-    int max_fd = -1;    // Holds the maximum file descriptor number
-    FD_ZERO(&read_fds); // Initialize the set
+    int max_fd = -1;
+    FD_ZERO(&read_fds);
 
-    // Add the read-ends of your result pipes to the set and determine max_fd
-    for (int i = 0; i < SLAVES; i++)
-    {
-        FD_SET(fd_results[i * 2], &read_fds);
-        if (fd_results[i * 2] > max_fd)
-        {
-            max_fd = fd_results[i * 2];
+    for (int i = 0; i < SLAVES; i++) {
+        FD_SET(data->fd_results[i * 2], &read_fds);
+        if (data->fd_results[i * 2] > max_fd) {
+            max_fd = data->fd_results[i * 2];
         }
     }
 
-    // Keep track of the number of slaves you still expect results from
     int slaves_remaining = SLAVES;
-
-    while (slaves_remaining > 0)
-    {
-        fd_set temp_set = read_fds; // Since select modifies the set, use a copy each time
+    while (slaves_remaining > 0) {
+        fd_set temp_set = read_fds;
         int activity = select(max_fd + 1, &temp_set, NULL, NULL, NULL);
 
-        if (activity < 0 && errno != EINTR)
-        {
+        if (activity < 0 && errno != EINTR) {
             perror("select");
             exit(1);
         }
 
-        for (int i = 0; i < SLAVES; i++)
-        {
-            // If this pipe has data
-            if (FD_ISSET(fd_results[i * 2], &temp_set))
-            {
-                while ((bytesRead = read(fd_results[i * 2], buffer, sizeof(buffer))) > 0)
-                {
-                    write(fdout, buffer, bytesRead); // Write to the output.txt file
+        for (int i = 0; i < SLAVES; i++) {
+            if (FD_ISSET(data->fd_results[i * 2], &temp_set)) {
+                while ((bytesRead = read(data->fd_results[i * 2], buffer, sizeof(buffer))) > 0) {
+                    write(fdout, buffer, bytesRead);
                 }
-
-                // Once a pipe has been closed (child finished) remove it from read_fds
-                FD_CLR(fd_results[i * 2], &read_fds);
+                FD_CLR(data->fd_results[i * 2], &read_fds);
                 slaves_remaining--;
             }
         }
     }
-
-    closeAppPipes(fd_results, INPUT);
-    close(fdout);
-
-    return 0;
+    closeAppPipes(data->fd_results, INPUT);
 }
 
 void createPipes(int *res, int *arg)
@@ -118,11 +96,11 @@ void closeAndRedirect(int *res, int *arg, int i)
 
     // Child process: Read arguments from arg Pipe
     close(arg[i * 2 + 1]); // Close the write-end of the arguments pipe
-    dup2(arg[i * 2], 0);   // Redirect stdin to the read-end of the arguments pipe
+    dup2(arg[i * 2], INPUT);   // Redirect stdin to the read-end of the arguments pipe
     close(arg[i * 2]);     // Close the original read-end of the arguments pipe
     // Child process: Write results to res Pipe
     close(res[i * 2]);       // Close the read-end of the result pipe
-    dup2(res[i * 2 + 1], 1); // Redirect stdout to the write-end of the pipe
+    dup2(res[i * 2 + 1], OUTPUT); // Redirect stdout to the write-end of the pipe
     close(res[i * 2 + 1]);   // Close the original write-end of the pipe
 
     // Close every remaining unwanted pipe
@@ -160,7 +138,7 @@ void closeSiblingPipes(int *res, int *arg, int i)
     }
 }
 
-void createChild(pid_t *child_pids, int total_files, char **argv, int *res, int *arg)
+void createChildren(pid_t *child_pids, int total_files, char **argv, int *res, int *arg)
 {
     pid_t pid;
 
@@ -178,7 +156,6 @@ void createChild(pid_t *child_pids, int total_files, char **argv, int *res, int 
         }
         if (pid == 0)
         { // Child process
-            printf("Child process with PID = %d\n", getpid());
             closeAndRedirect(res, arg, i);
 
             char *args[current_slave_files + 2];

@@ -1,11 +1,33 @@
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
-#define MD5_LEN 33
+#include "worker.h"
 
-// Recibe como unico parametro el path al file y retorna puntero a string del md5
+int main(int argc, char *argv[])
+{
+    if (argc < 2)
+    {
+        fprintf(stderr, "Please pass at least one file path as argument.\n");
+        return 1;
+    }
+
+    for (int i = 1; i < argc; i++)
+    {
+        char *filePath = argv[i];
+        char *md5 = calculate_md5(filePath);
+        if (md5 != NULL)
+        {
+            printf("PID: %d - %s - %s\n", getpid(), md5, filePath);
+            free(md5);
+        }
+        else
+        {
+            fprintf(stderr, "Process %d failed to calculate MD5 hash for %s\n", getpid(), filePath);
+        }
+    }
+    return 0;
+}
+
 char *calculate_md5(const char *filePath)
 {
     char command[100];
@@ -42,29 +64,4 @@ char *calculate_md5(const char *filePath)
 
     pclose(fp);
     return md5;
-}
-
-int main(int argc, char *argv[])
-{
-    if (argc < 2)
-    {
-        fprintf(stderr, "Please pass at least one file path as argument.\n");
-        return 1;
-    }
-
-    for (int i = 1; i < argc; i++)
-    {
-        char *filePath = argv[i];
-        char *md5 = calculate_md5(filePath);
-        if (md5 != NULL)
-        {
-            printf("PID: %d - %s - %s\n", getpid(), md5, filePath);
-            free(md5);
-        }
-        else
-        {
-            fprintf(stderr, "Process %d failed to calculate MD5 hash for %s\n", getpid(), filePath);
-        }
-    }
-    return 0;
 }

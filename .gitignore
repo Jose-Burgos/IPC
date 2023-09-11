@@ -3,5 +3,5 @@
 *.out
 *.txt
 *.o
-./bin
+bin/
 ./files
