@@ -1,202 +1,226 @@
-#include <string.h>
-#include <sys/wait.h>
-#include <unistd.h>
-#include <time.h>
-#include <fcntl.h>
-#include <errno.h>
 #include "app.h"
 
-int main(int argc, char *argv[]) {
+int main(int argc, char **argv) 
+{
     AppData data;
-    int fdout = open("output.txt", O_CREAT | O_RDWR);
+    initAppData(&data, argc);
+    launchSlaves(&data);
+    
 
-    initAppData(&data);
-    distributeFiles(&data, argc, argv);
-    waitForChildren(&data);
-    gatherResults(&data, fdout);
-
-    close(fdout);
-    return 0;
-}
-
-void initAppData(AppData *data) {
-    createPipes(data->fd_results, data->fd_args);
-}
-
-void distributeFiles(AppData *data, int argc, char **argv) {
-    int current_arg = 1;
-    int total_files = argc - 1;
-    writeArguments(total_files, &current_arg, total_files / SLAVES, total_files % SLAVES, argv, data->fd_args);
-    createChildren(data->child_pids, total_files, argv, data->fd_results, data->fd_args);
-    closeAppPipes(data->fd_results,OUTPUT);
-}
-
-void waitForChildren(AppData *data) {
-    for (int i = 0; i < SLAVES; i++) {
-        waitpid(data->child_pids[i], NULL, 0);
+    // Initial single file distribution to each slave.
+    for (int i = 0; i < SLAVES; i++)
+    {
+        sendFilesToSlave(&data, i, argv);
     }
-}
 
-void gatherResults(AppData *data, int fdout) {
-    closeAppPipes(data->fd_args, OUTPUT);
-    closeAppPipes(data->fd_args, INPUT);
-
-    char buffer[4096];
-    ssize_t bytesRead = 0;
-
+    char buffer[BUFFER_SIZE];
     fd_set read_fds;
-    int max_fd = -1;
-    FD_ZERO(&read_fds);
+    int max_fd;
 
-    for (int i = 0; i < SLAVES; i++) {
-        FD_SET(data->fd_results[i * 2], &read_fds);
-        if (data->fd_results[i * 2] > max_fd) {
-            max_fd = data->fd_results[i * 2];
+    while (data.pendingResults)
+    {
+        FD_ZERO(&read_fds);
+        max_fd = -1;
+
+        // Add slave pipes to the fd set for reading
+        for (int i = 0; i < SLAVES; i++)
+        {
+            FD_SET(data.fd_results[i * 2 + READ_END], &read_fds);
+            if (data.fd_results[i * 2 + READ_END] > max_fd)
+            {
+                max_fd = data.fd_results[i * 2 + READ_END];
+            }
         }
-    }
 
-    int slaves_remaining = SLAVES;
-    while (slaves_remaining > 0) {
-        fd_set temp_set = read_fds;
-        int activity = select(max_fd + 1, &temp_set, NULL, NULL, NULL);
+        int activity = select(max_fd + 1, &read_fds, NULL, NULL, NULL);
 
-        if (activity < 0 && errno != EINTR) {
+        if (activity < 0)
+        {
             perror("select");
             exit(1);
         }
 
-        for (int i = 0; i < SLAVES; i++) {
-            if (FD_ISSET(data->fd_results[i * 2], &temp_set)) {
-                while ((bytesRead = read(data->fd_results[i * 2], buffer, sizeof(buffer))) > 0) {
-                    write(fdout, buffer, bytesRead);
+        for (int i = 0; i < SLAVES; i++)
+        {
+            if (FD_ISSET(data.fd_results[i * 2 + READ_END], &read_fds))
+            {
+                size_t bytesRead = read(data.fd_results[i * 2 + READ_END], buffer, sizeof(buffer));
+
+                if (bytesRead > 0)
+                {
+                    //printf("Read %s from slave %d\n", buffer, i);
+                    data.pendingResults--;                // One less result pending.
+                    data.slaves_load[i]--;  
+                    //printf("Slave %d now has load %d and the total pending results is %d\n", i, data.slaves_load[i], data.pendingResults);              // This slave has one less job.
+                    write(data.fdout, buffer, bytesRead); // Write result to output file.
+                    
+                    // Send next file to this slave if available.
+                    sendFilesToSlave(&data, i, argv);
                 }
-                FD_CLR(data->fd_results[i * 2], &read_fds);
-                slaves_remaining--;
+                // else
+                // {
+                //     // Close pipe when done.
+                //     close(data.fd_results[i * 2 + READ_END]);
+                // }
             }
+        
         }
     }
-    closeAppPipes(data->fd_results, INPUT);
+    terminateApp(&data);
+    return 0;
 }
 
-void createPipes(int *res, int *arg)
+void initAppData(AppData *data, int argc)
 {
+    data->totalFiles = argc - 1;
+    data->currentFileIndex = 1;
+    data->pendingResults = 0;
+    int fdout = open("output.txt", O_CREAT | O_RDWR, 0644);
+    if (fdout == -1)
+    {
+        perror("open");
+        exit(EXIT_FAILURE);
+    }
+    data->fdout = fdout;
     for (int i = 0; i < SLAVES; i++)
     {
-        if (pipe(res + i * 2) == -1 || pipe(arg + i * 2) == -1)
+        if (pipe((data->fd_results) + i * 2) == -1 || pipe((data->fd_args) + i * 2) == -1)
         {
             perror("pipe");
+            // Close any previously created pipes before exiting
+            for (int j = 0; j < i; j++)
+            {
+                close(data->fd_results[j * 2]);
+                close(data->fd_results[j * 2 + 1]);
+                close(data->fd_args[j * 2]);
+                close(data->fd_args[j * 2 + 1]);
+            }
             exit(1);
         }
+        data->child_pids[i] = -1;
+        data->slaves_load[i] = 0;
     }
     return;
 }
 
-void closeAndRedirect(int *res, int *arg, int i)
+static void slaveDone(int slaveIndex, AppData *data)
 {
-
-    // Child process: Read arguments from arg Pipe
-    close(arg[i * 2 + 1]); // Close the write-end of the arguments pipe
-    dup2(arg[i * 2], INPUT);   // Redirect stdin to the read-end of the arguments pipe
-    close(arg[i * 2]);     // Close the original read-end of the arguments pipe
-    // Child process: Write results to res Pipe
-    close(res[i * 2]);       // Close the read-end of the result pipe
-    dup2(res[i * 2 + 1], OUTPUT); // Redirect stdout to the write-end of the pipe
-    close(res[i * 2 + 1]);   // Close the original write-end of the pipe
-
-    // Close every remaining unwanted pipe
-    closeSiblingPipes(res, arg, i);
-
+    //printf("Master: Closing slave number %d's argument pipe\n", slaveIndex);
+    close(data->fd_args[slaveIndex * 2 + WRITE_END]);
     return;
 }
 
-void writeArguments(int total_files, int *current_arg_ptr, int files_per_slave, int extra_file_slaves, char **argv, int *fd_args)
+void sendFilesToSlave(AppData *data, int slaveIndex, char **argv)
 {
-    for (int i = 0; i < SLAVES; i++)
+    if (data->currentFileIndex <= data->totalFiles)
     {
-        int current_slave_files = files_per_slave + (i < extra_file_slaves ? 1 : 0); // Check if the current slave processes an extra file
+        // Update load and pending results
+        data->slaves_load[slaveIndex]++;
+        data->pendingResults++;
 
-        for (int j = 0; j < current_slave_files; j++)
+        //printf("Master: writing argument %s to slave number %d's pipe\n", argv[data->currentFileIndex], slaveIndex);
+
+        if (write(data->fd_args[slaveIndex * 2 + WRITE_END], argv[data->currentFileIndex], strlen(argv[data->currentFileIndex])) == -1)
         {
-            write(fd_args[i * 2 + 1], argv[*current_arg_ptr], strlen(argv[*current_arg_ptr]));
-            write(fd_args[i * 2 + 1], "\n", 1);
-            (*current_arg_ptr)++;
+            perror("write");
+            exit(1);
         }
+
+        // Send the newline delimiter
+        if (write(data->fd_args[slaveIndex * 2 + WRITE_END], "\n", 1) == -1)
+        {
+            perror("write");
+            exit(1);
+        }
+
+        data->currentFileIndex++;
+    }
+    else if (data->slaves_load[slaveIndex] == 0)
+    {
+        // This worker is done, close its pipe
+        slaveDone(slaveIndex, data);
     }
 }
 
-void closeSiblingPipes(int *res, int *arg, int i)
+void launchSlaves(AppData *data)
 {
-    for (int j = 0; j < SLAVES; j++)
-    {
-        if (j != i)
-        {
-            close(arg[j * 2]);
-            close(arg[j * 2 + 1]);
-            close(res[j * 2]);
-            close(res[j * 2 + 1]);
-        }
-    }
-}
-
-void createChildren(pid_t *child_pids, int total_files, char **argv, int *res, int *arg)
-{
-    pid_t pid;
-
-    int files_per_slave = total_files / SLAVES;
-    int extra_file_slaves = total_files % SLAVES;
-
     for (int i = 0; i < SLAVES; i++)
     {
-        int current_slave_files = files_per_slave + (i < extra_file_slaves ? 1 : 0);
+        data->child_pids[i] = fork();
 
-        if ((pid = fork()) < 0)
+        if (data->child_pids[i] == -1)
         {
             perror("fork");
-            exit(2);
-        }
-        if (pid == 0)
-        { // Child process
-            closeAndRedirect(res, arg, i);
-
-            char *args[current_slave_files + 2];
-            args[0] = "./worker";
-
-            char buffer[256];
-            for (int j = 0; j < current_slave_files; j++)
-            {
-                int idx = 0; // position in the buffer
-                char ch;     // read character
-                while (read(0, &ch, 1) == 1 && ch != '\n')
-                {
-                    buffer[idx++] = ch;
-                }
-                buffer[idx] = '\0'; // null-terminate
-                args[j + 1] = strdup(buffer);
-            }
-            args[current_slave_files + 1] = NULL;
-
-            execv(args[0], args);
-            perror("execv");
-
-            // Free allocated memory in case execv fails
-            for (int j = 1; j <= current_slave_files; j++)
-            {
-                free(args[j]);
-            }
+            closePipes(data, i);
             exit(1);
         }
+
+        // We're in the child process
+        if (data->child_pids[i] == 0)
+        {
+            if (dup2(data->fd_args[i * 2 + READ_END], STDIN_FILENO) == -1 || dup2(data->fd_results[i * 2 + WRITE_END], STDOUT_FILENO) == -1)
+            {
+                perror("dup2");
+                exit(1);
+            }
+
+            closePipes(data, i);
+
+            // Execute the worker using execv
+            char *argv[] = {WORKER_PATH, NULL};
+            execv(argv[0], argv);
+
+            // If execv fails
+            perror("execv");
+            exit(1);
+        }
+
+        // We're in the parent process
         else
         {
-            child_pids[i] = pid;
+            close(data->fd_args[i * 2 + READ_END]);
+            close(data->fd_results[i * 2 + WRITE_END]);
         }
     }
 }
 
-void closeAppPipes(int *fds, int flag)
+// El padre cierra para cada creacion de un hijo el r-end de argumentos y el w-end de resultados
+// cada hijo hereda sus 4 correspondientes ends de sus pipes y todos los w-end de argumentos y r-end de resultados del padre
+// cada hijo tiene que cerrar sus 4 fds y todos los r-end args y w-end res
+// el primero tiene que cerrar todos
+void closePipes(AppData *data, int slaveIndex)
 {
+    for (int i = 0; i <= slaveIndex; i++)
+    {
+        if (i == slaveIndex)
+        {
+            close(data->fd_args[i * 2 + WRITE_END]);
+            close(data->fd_args[i * 2 + READ_END]);
+            close(data->fd_results[i * 2 + WRITE_END]);
+            close(data->fd_results[i * 2 + READ_END]);
+        } else {
+            close(data->fd_args[i * 2 + WRITE_END]);
+            close(data->fd_results[i * 2 + READ_END]);
+        }
+    }
+}
+
+void terminateApp(AppData *data)
+{
+    // All files processed and results gathered. Close remaining file descriptors.
     for (int i = 0; i < SLAVES; i++)
     {
-        close(fds[i * 2 + flag]);
+        close(data->fd_args[i * 2 + WRITE_END]);
+        close(data->fd_results[i * 2 + READ_END]);
     }
+
+    // Wait for all child processes to finish.
+    for (int i = 0; i < SLAVES; i++)
+    {
+        waitpid(data->child_pids[i], NULL, 0);
+    }
+
+    close(data->fdout);
+
     return;
 }

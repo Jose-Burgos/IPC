@@ -1,67 +1,68 @@
-#include <string.h>
-#include <sys/types.h>
-#include <unistd.h>
 #include "worker.h"
 
-int main(int argc, char *argv[])
+int main()
 {
-    if (argc < 2)
+    char filePath[PATH_MAX]; // Assuming file paths won't be longer than 256 characters
+    size_t len;
+    while (true)
     {
-        fprintf(stderr, "Please pass at least one file path as argument.\n");
-        return 1;
-    }
-
-    for (int i = 1; i < argc; i++)
-    {
-        char *filePath = argv[i];
-        char *md5 = calculate_md5(filePath);
-        if (md5 != NULL)
+        if (fgets(filePath, sizeof(filePath), stdin) == NULL)
         {
-            printf("PID: %d - %s - %s\n", getpid(), md5, filePath);
-            free(md5);
+            //EOF, master closed write-end of arguments pipe
+            break;
+        }
+        // Remove the trailing newline character
+        len = strlen(filePath);
+        if (len > 0 && filePath[len - 1] == '\n')
+        {
+            filePath[len - 1] = '\0';
         }
         else
         {
-            fprintf(stderr, "Process %d failed to calculate MD5 hash for %s\n", getpid(), filePath);
+            fprintf(stderr, "Unexpected input format or truncated path. Length: %zu, Last char: %c\n", len, filePath[len - 1]);
+            // Decide whether to continue, skip or exit
         }
+        // Perform MD5 calculation (or whatever processing you need)
+        calculate_md5(filePath);
     }
+    // When fgets returns NULL, it's an indicator that the pipe has been closed (EOF).
+    // Perform any cleanup or final operations here.
+
     return 0;
 }
 
-char *calculate_md5(const char *filePath)
+void calculate_md5(const char *filePath)
 {
     char command[100];
     FILE *fp;
 
-    // Armo al comando para ejectuar md5sum con el path
+    // Build command to execute md5Sum with filePath
     snprintf(command, sizeof(command), "md5sum %s", filePath);
 
-    // Uso popen para leer mediante un pipe la salida del comando
+    // Use popen to read through a pipe the output of the command
     fp = popen(command, "r");
     if (fp == NULL)
     {
         perror("popen");
-        return NULL;
+        exit(1);
     }
 
-    // Creo un vector dinamico para almacenar el md5
-    char *md5 = (char *)malloc(MD5_LEN);
-    if (md5 == NULL)
-    {
-        perror("malloc");
-        pclose(fp);
-        return NULL;
-    }
+    // array to store the md5 string
+    char md5[MD5_LEN];
 
-    // Leo con fgets del pipe
+    // Read with fgets from the pipe
     if (fgets(md5, MD5_LEN, fp) == NULL)
     {
         perror("fgets");
-        free(md5);
         pclose(fp);
-        return NULL;
+        exit(1);
     }
 
+    md5[MD5_LEN] = '\0';
     pclose(fp);
-    return md5;
+
+    char result[RESULT_MAX];
+    snprintf(result, RESULT_MAX, "PID: %d - %s - %s\n", getpid(), md5, filePath);
+    write(STDOUT_FILENO, result, strlen(result));
+    return;
 }
