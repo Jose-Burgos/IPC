@@ -2,11 +2,9 @@
 // PVS-Studio Static Code Analyzer for C, C++ and C#: http://www.viva64.com
 #include "view.h"
 
-void openshm(const char *path, Shm **shm_data);
-void closeshm(Shm *shm_data);
-
 int main(int argc, char **argv)
 {
+    setvbuf(stdout, NULL, _IONBF, 0);
     char path[SHM_PATH_LEN];
     if (argc < 2)
     {
@@ -21,20 +19,19 @@ int main(int argc, char **argv)
         fprintf(stderr, "Incorrect amount of arguments\n");
         return -1;
     }
-    path[SHM_PATH_LEN - 1] = '\0'; // El path pasa a estar NULL terminated.
+    path[SHM_PATH_LEN - 1] = '\0';
     Shm *data_shm;
+    int idx = 0;
     openshm(path, &data_shm);
 
-    for (size_t i = 0; i < data_shm->files_count; i++)
+    while (idx < (int)data_shm->files_count)
     {
-        sem_wait(&data_shm->sem_writer);
-        char s_aux[RESULT_MAX - 1];
-        strncpy(s_aux, data_shm->buffer_path + (i * RESULT_MAX), RESULT_MAX - 1);
-        printf("%s", s_aux);
+        sem_wait(&data_shm->sem_reader); // Wait for new data to be available
+        fprintf(stdout ,data_shm->buffer_path + (idx * RESULT_MAX));
+        idx++;
+        // sem_post(&data_shm->sem_reader);
     }
-
-    sem_post(&data_shm->sem_reader);
-
+    sem_post(&data_shm->sem_writer);
     closeshm(data_shm);
     return 0;
 }
@@ -57,13 +54,11 @@ void openshm(const char *path, Shm **shm_data)
     int fd_buffer;
     if ((fd_buffer = shm_open(SHM_PATH, O_RDONLY, 0600)) == -1)
     {
-        sem_post(&data->sem_reader);
         perror("shm open failed");
         exit(EXIT_FAILURE);
     }
     if ((data->buffer_path = mmap(NULL, RESULT_MAX * data->files_count, PROT_READ, MAP_SHARED, fd_buffer, 0)) == MAP_FAILED)
     {
-        sem_post(&data->sem_reader);
         perror("mmap failed");
         exit(EXIT_FAILURE);
     }

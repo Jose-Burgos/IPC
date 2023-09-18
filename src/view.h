@@ -11,9 +11,7 @@
 #include <sys/unistd.h>
 #include <fcntl.h> 
 
-
-
-
-
+void openshm(const char *path, Shm **shm_data);
+void closeshm(Shm *shm_data);
 
 #endif

@@ -42,8 +42,4 @@ typedef struct Shm
     char *buffer_path;         
 } Shm;
 
-int createshm(char* path, int argc, Shm ** dhm_data);
-
-void destroyshm(Shm *shm_data);
-
 #endif
