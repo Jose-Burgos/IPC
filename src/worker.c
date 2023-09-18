@@ -1,3 +1,5 @@
+// This is a personal academic project. Dear PVS-Studio, please check it.
+// PVS-Studio Static Code Analyzer for C, C++ and C#: http://www.viva64.com
 #include "worker.h"
 
 int main()
@@ -19,7 +21,7 @@ int main()
         }
         else
         {
-            fprintf(stderr, "Unexpected input format or truncated path. Length: %zu, Last char: %c\n", len, filePath[len - 1]);
+            fprintf(stderr, "Unexpected input format or truncated path. Length: %zu, Last char: %c\n", len, filePath[len]);
             // Decide whether to continue, skip or exit
         }
         // Perform MD5 calculation (or whatever processing you need)
@@ -58,7 +60,7 @@ void calculate_md5(const char *filePath)
         exit(1);
     }
 
-    md5[MD5_LEN] = '\0';
+    md5[MD5_LEN - 1] = '\0';
     pclose(fp);
 
     char result[RESULT_MAX];

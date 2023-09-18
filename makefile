@@ -1,6 +1,6 @@
 # Define commands & the compiler and compiler flags
 CC = gcc
-CFLAGS = -Wall -Iinclude
+CFLAGS = -Iinclude -pthread -g -Wall -Wextra -Werror 
 MD = mkdir -p
 
 # Define source file directories
@@ -30,6 +30,13 @@ run_app:
 	./bin/app files/*.txt
 
 run_slave:
-	./bin/worker files/file1.txt
+	./bin/worker files/*.txt
 
-# run_view: 
+run_app_docker:
+	./bin/app ./files/*.txt
+
+run_view: 
+	./bin/view
+
+run_app_and_view:
+	./bin/app ./files/*.txt | ./bin/view

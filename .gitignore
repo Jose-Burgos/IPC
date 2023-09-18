@@ -7,3 +7,6 @@ bin/
 ./files
 .vscode
 .*
+PVS-Studio.log
+report.tasks
+strace_out
