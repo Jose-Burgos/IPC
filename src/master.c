@@ -1,3 +1,5 @@
+// This is a personal academic project. Dear PVS-Studio, please check it.
+// PVS-Studio Static Code Analyzer for C, C++ and C#: http://www.viva64.com
 #include "master.h"
 
 void initAppData(AppData *data, int argc)
@@ -215,9 +217,9 @@ int createshm(char *path, int argc, Shm **shm_data)
         exit(EXIT_FAILURE);
     }
 
-    shm_aux->buffer_path = mmap(NULL, RESULT_MAX * argc, PROT_READ | PROT_WRITE, MAP_SHARED, fd_data, 0);
+    shm_aux->buffer_app = mmap(NULL, RESULT_MAX * argc, PROT_READ | PROT_WRITE, MAP_SHARED, fd_data, 0);
     close(fd_buffer);
-    if (shm_aux->buffer_path == MAP_FAILED)
+    if (shm_aux->buffer_app == MAP_FAILED)
     {
         destroyshm(shm_aux);
         perror("map failed");
@@ -231,6 +233,6 @@ void destroyshm(Shm *shm_data)
 {
     sem_destroy(&shm_data->sem_reader);
     sem_destroy(&shm_data->sem_writer);
-    munmap(shm_data->buffer_path, shm_data->files_count * RESULT_MAX);
+    munmap(shm_data->buffer_app, shm_data->files_count * RESULT_MAX);
     munmap(shm_data, sizeof(Shm));
 }

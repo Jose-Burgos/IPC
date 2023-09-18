@@ -21,6 +21,7 @@
 #define SHM_PATH "/shm"
 #define SHM_PATH_LEN 6 
 
+#define SLEEP 2
 #define BUFFER_SIZE 2048
 #define PATH_MAX 30
 #define MD5_LEN 33
@@ -39,7 +40,8 @@ typedef struct Shm
     sem_t sem_writer;         
     sem_t sem_reader;         
     size_t files_count; 
-    char *buffer_path;         
+    char *buffer_app;
+    char *buffer_view;         
 } Shm;
 
 #endif

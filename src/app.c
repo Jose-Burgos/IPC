@@ -4,6 +4,7 @@
 
 int main(int argc, char **argv)
 {
+    setvbuf(stdout, NULL, _IONBF, 0);
     unlink("/dev/shm/shm");
     unlink("/dev/shm/view");
 
@@ -19,8 +20,7 @@ int main(int argc, char **argv)
         return ERROR;
     }
     fprintf(stdout, "%s\n", SHM_DATA_PATH);
-    
-    sleep(2);
+    sleep(SLEEP);
 
     for (int i = 0; i < SLAVES; i++) // Initial single file distribution to each slave.
     {
@@ -54,23 +54,21 @@ int main(int argc, char **argv)
             destroyshm(shm_data);
             exit(1);
         }
-
         for (int i = 0; i < SLAVES; i++)
         {
             if (FD_ISSET(data.fd_results[i * 2 + READ_END], &read_fds))
             {
                 size_t bytesRead = read(data.fd_results[i * 2 + READ_END], buffer, sizeof(buffer));
-                
-                if (bytesRead > 0)
+                if (bytesRead > 0 && bytesRead < BUFFER_SIZE)
                 {
                     data.pendingResults--; // One less result pending.
                     data.slaves_load[i]--;
                     write(data.fdout, buffer, bytesRead); // Write result to output file.
-                    strncpy(shm_data->buffer_path + (shm_idx * RESULT_MAX), buffer, bytesRead);
+                    strncpy(shm_data->buffer_app + (shm_idx * RESULT_MAX), buffer, bytesRead);
                     shm_idx++; 
                     sem_post(&shm_data->sem_reader); // Available data
                     sendFilesToSlave(&data, i, argv); //  Send next file to this slave if available.
-                }
+                } 
             }
         }
     }

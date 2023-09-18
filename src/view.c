@@ -4,7 +4,6 @@
 
 int main(int argc, char **argv)
 {
-    setvbuf(stdout, NULL, _IONBF, 0);
     char path[SHM_PATH_LEN];
     if (argc < 2)
     {
@@ -27,11 +26,10 @@ int main(int argc, char **argv)
     while (idx < (int)data_shm->files_count)
     {
         sem_wait(&data_shm->sem_reader); // Wait for new data to be available
-        fprintf(stdout ,data_shm->buffer_path + (idx * RESULT_MAX));
+        fprintf(stdout ,data_shm->buffer_view + (idx * RESULT_MAX));
         idx++;
-        // sem_post(&data_shm->sem_reader);
     }
-    sem_post(&data_shm->sem_writer);
+    sem_post(&data_shm->sem_writer); // Reader finish
     closeshm(data_shm);
     return 0;
 }
@@ -57,7 +55,7 @@ void openshm(const char *path, Shm **shm_data)
         perror("shm open failed");
         exit(EXIT_FAILURE);
     }
-    if ((data->buffer_path = mmap(NULL, RESULT_MAX * data->files_count, PROT_READ, MAP_SHARED, fd_buffer, 0)) == MAP_FAILED)
+    if ((data->buffer_view = mmap(NULL, RESULT_MAX * data->files_count, PROT_READ, MAP_SHARED, fd_buffer, 0)) == MAP_FAILED)
     {
         perror("mmap failed");
         exit(EXIT_FAILURE);
@@ -68,7 +66,7 @@ void openshm(const char *path, Shm **shm_data)
 
 void closeshm(Shm *shm_data)
 {
-    munmap(shm_data->buffer_path, shm_data->files_count * RESULT_MAX);
+    munmap(shm_data->buffer_view, shm_data->files_count * RESULT_MAX);
     unlink("/dev/shm/shm");
     munmap(shm_data, sizeof(Shm));
     unlink("/dev/shm/view");

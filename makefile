@@ -28,16 +28,13 @@ clean:
 	rm -rf $(BIN_DIR) output.txt
 
 run_app:
-	./bin/app files/*.txt
+	./bin/app ./files/*.txt
 
 run_slave:
 	./bin/worker files/*.txt
 
-run_app_docker:
-	./bin/app ./files/*.txt
-
 run_view: 
-	./bin/view
+	./bin/view /view
 
 run_app_and_view:
 	./bin/app ./files/*.txt | ./bin/view
